@@ -1,0 +1,200 @@
+---
+title: "HotelReservation"
+author: "Ravita Kartawinata"
+date: "2023-07-21"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+#loading data and library
+library(knitr)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(corrplot)
+library(caret)
+library(scales)
+library(tidyr)
+library(rpart)
+library(rpart.plot)
+library(C50)
+library(MLmetrics)
+library(MASS)
+library(gridExtra)
+library(e1071)
+library(RWeka)
+library(sampling)
+library(keras)
+library(nnet)
+library(randomForest)
+library(reshape2)
+library(pROC)
+
+
+Hotel_Reservations <- read.csv("C:/Users/rkartawi/Desktop/Ravita/MSADS/502/Mod4/4_2Team/Hotel Reservations.csv")
+#Hotel_Reservations <- Hotel_Reservations %>% select(-Booking_ID)
+
+```
+
+# Dataset characteristics
+```{r}
+#understanding data architect
+#sapply(Hotel_Reservations,class)
+rm_continuous_value <- Hotel_Reservations[,!names(Hotel_Reservations) %in% 
+        c("Booking_ID","lead_time", "avg_price_per_room","no_of_previous_bookings_not_canceled",
+          "no_of_week_nights", "no_of_weekend_nights","no_of_adults", "no_of_children",
+          "no_of_previous_cancellations")]
+continous_value <- Hotel_Reservations[,names(Hotel_Reservations) %in% 
+        c("lead_time", "avg_price_per_room","no_of_previous_bookings_not_canceled",
+          "no_of_week_nights", "no_of_weekend_nights","no_of_adults", "no_of_children",
+          "no_of_previous_cancellations","booking_status")]
+cat('Number of instances: ',nrow(Hotel_Reservations))
+
+
+```
+# Instances characteristics
+```{r}
+#understanding instances
+summary(Hotel_Reservations)
+
+#getting unique value in non continuous column
+ for (col in names(rm_continuous_value)) {
+     unique_values <- unique(rm_continuous_value[[col]])
+     cat("\n")
+     cat("Column class type:", class(col),"\n")
+     cat("Unique values in column", col, ":\n")
+     print(unique_values)
+     
+ }
+
+#find duplicate values 
+cat('Total duplicated instances: ')
+subset(Hotel_Reservations, duplicated(Hotel_Reservations))
+
+
+#any missing value
+cat('\nMissing value:')
+which(colSums(is.na(Hotel_Reservations)) > 0)
+
+
+```
+
+# histogram for continuous feature
+```{r}
+ for (col in names(continous_value)) {
+    line_data <- continous_value %>%
+      ggplot(aes(x= .data[[col]], color=booking_status)) + 
+      geom_line(stat="count")
+    grid.arrange(line_data)
+
+}
+```
+
+# boxplot Lead Time and Avg price per room
+```{r}
+boxplot(Hotel_Reservations$lead_time, main = "Lead_time", xlab = "Columns", ylab = "Values")
+boxplot(Hotel_Reservations$avg_price_per_room, main = "Avg_price_per_room", xlab = "Columns", ylab = "Values")
+
+```
+# Categorize continuous features (Lead Time and Avg_price_per_room)
+```{r}
+# lead_time ("0-15","16-50", "51-100", "101-150", "151-200", "201+")
+LT_breaks <- c(-Inf, 15, 50, 100, 150, 200, Inf)
+LT_labels <- c("0-15","16-50", "51-100", "101-150", "151-200", "201+")
+Hotel_Reservations$C_lead_time <- as.factor(cut(Hotel_Reservations$lead_time, breaks = LT_breaks, labels = LT_labels))
+
+# avg_price_per_room (0-50, 51-100, 101-150, 151-200, 201-300, 300+)
+Pr_breaks <- c(-Inf, 80, 100,120, 150, 200, 250, Inf)
+Pr_labels <- c("0-80","81-100", "101-120","121-150", "151-200", "201-250", "251+")
+Hotel_Reservations$C_avg_price_per_room <- as.factor(cut(Hotel_Reservations$avg_price_per_room, breaks = Pr_breaks, labels = Pr_labels))
+
+rm_continuous_value$C_avg_price_per_room <- Hotel_Reservations$C_avg_price_per_room
+rm_continuous_value$C_lead_time <- Hotel_Reservations$C_lead_time
+
+```
+
+# Plot Booking status to other categorial features
+```{r}
+ for (col in names(rm_continuous_value)) {
+    plot_data <- Hotel_Reservations %>%
+    ggplot(aes(x = factor(.data[[col]]), fill = booking_status)) +
+    geom_bar(position = position_dodge()) +
+    geom_text(aes(label = ..count..), stat = "count") +
+    labs(x = col)  
+    grid.arrange(plot_data)
+}
+
+```
+
+# heatmap continous feature
+```{r}
+corrplot(cor(subset(continous_value, select = -booking_status)))
+```
+# Plot 2 predictors with booking status overlay
+```{r}
+ggplot(Hotel_Reservations, aes(lead_time)) + 
+  geom_histogram(aes(fill = booking_status), position = position_dodge(), color = "black")
+
+ggplot(data=Hotel_Reservations, aes(C_lead_time)) +
+  geom_bar(aes(fill=booking_status), position = "fill")+ coord_flip()
+
+ggplot(Hotel_Reservations, aes(avg_price_per_room)) + 
+  geom_histogram(aes(fill = booking_status), position = position_dodge(), color = "black")
+
+ggplot(data=Hotel_Reservations, aes(C_avg_price_per_room)) +
+  geom_bar(aes(fill=booking_status), position = "fill")+ coord_flip()
+```
+# Split train to test
+```{r}
+set.seed(24)
+original <- nrow(Hotel_Reservations)
+train_ind <- runif(original) < 0.80
+train_data <- Hotel_Reservations[train_ind,]
+test_data <- Hotel_Reservations[!train_ind,]
+train_data$booking_status <- as.factor(train_data$booking_status)
+test_data$booking_status <- as.factor(test_data$booking_status)
+
+
+```
+
+# Classifier
+```{r}
+cart <- rpart(formula = booking_status ~ C_lead_time  
+               + C_avg_price_per_room, data = train_data, method= "class")
+
+pred_CART <-  predict(object = cart, newdata = test_data, type = "class")
+
+cm_CART <- confusionMatrix(pred_CART, test_data$booking_status)
+
+
+C5 <-  C5.0(booking_status ~ C_lead_time + C_avg_price_per_room, 
+            data = train_data)
+
+pred_C5 <-  predict(object = C5, newdata = test_data, type = "class")
+
+cm_c5 <- confusionMatrix(pred_C5, test_data$booking_status)
+
+
+
+nb <- naiveBayes(formula = booking_status ~ C_lead_time
+                 + C_avg_price_per_room, data = train_data)
+
+pred_nb <- predict(object = nb, newdata = test_data)
+
+cm_nb <- confusionMatrix(pred_nb, test_data$booking_status)
+
+
+logreg <- glm(formula = booking_status ~ C_lead_time + C_avg_price_per_room, 
+              data=train_data, family=binomial) 
+#summary(logreg)
+pred_logreg <-  predict(object=logreg, newdata = test_data)
+pred_logreg_bin <- ifelse(pred_logreg >= 0.5, 1, 0)
+#cm_logreg <- confusionMatrix(pred_logreg_bin, test_data$booking_status)
+
+t_pred_logreg <- table(test_data$booking_status, pred_logreg_bin)
+colnames(t_pred_logreg) <- c("Predicted: 0", "Predicted: 1")
+row.names(t_pred_logreg) <- c("Actual:  0", "Actual:  1")
+addmargins(A=t_pred_logreg, FUN = list(Total = sum), quiet = TRUE)
+
+
+```
