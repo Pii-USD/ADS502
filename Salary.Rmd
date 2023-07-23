@@ -1,0 +1,195 @@
+---
+title: "HotelReservation"
+author: "Ravita Kartawinata"
+date: "2023-07-21"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+#loading data and library
+library(knitr)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(corrplot)
+library(caret)
+library(scales)
+library(tidyr)
+library(rpart)
+library(rpart.plot)
+library(C50)
+library(MLmetrics)
+library(MASS)
+library(gridExtra)
+library(e1071)
+library(RWeka)
+library(sampling)
+library(keras)
+library(nnet)
+library(randomForest)
+library(reshape2)
+library(pROC)
+
+
+Salary_data <- read.csv("C:/Users/rkartawi/Desktop/Ravita/MSADS/502/Mod4/4_2Team/Salary.csv")
+
+```
+
+# Dataset characteristics
+```{r}
+#understanding data architect
+#sapply(Hotel_reservation,class)
+rm_continuous_value <- Salary_data[,!names(Salary_data) %in% 
+        c("age","fnlwgt", "capital.gain","capital.loss",
+          "hours.per.week","education.num","salary")]
+continous_value <- Salary_data[,names(Salary_data) %in% 
+        c("age","fnlwgt", "capital.gain","capital.loss",
+          "hours.per.week","education.num","salary")]
+cat('Number of instances: ',nrow(Salary_data))
+
+
+```
+# Instances characteristics
+```{r}
+#understanding instances
+summary(Salary_data)
+
+#getting unique value in non continuous column
+ for (col in names(rm_continuous_value)) {
+     unique_values <- unique(Salary_data[[col]])
+     cat("\n")
+     cat("Column class type:", class(col),"\n")
+     cat("Unique values in column", col, ":\n")
+     print(unique_values)
+     
+ }
+
+#find duplicate values 
+cat('Total duplicated instances: ')
+subset(Salary_data, duplicated(Salary_data))
+
+
+#any missing value
+cat('\nMissing value:')
+which(colSums(is.na(Salary_data)) > 0)
+
+
+```
+
+# histogram for continuous feature
+```{r}
+ for (col in names(continous_value)) {
+    line_data <- continous_value %>%
+      ggplot(aes(x= .data[[col]], color=salary)) + 
+      geom_line(stat="count")
+    grid.arrange(line_data)
+
+}
+```
+
+# boxplot Lead Time and Avg price per room
+```{r}
+#boxplot(continous_value[, !(names(continous_value) %in% c("salary"))]
+#        , main = "Lead_time", xlab = "Columns", ylab = "Values")
+boxplot(Salary_data$age, main = "Age", xlab = "Columns", horizontal = TRUE)
+boxplot(Salary_data$capital.gain, main = "capital gain", xlab = "Columns", ylab = "Values", horizontal = TRUE)
+boxplot(Salary_data$capital.loss, main = "capital loss", xlab = "Columns", ylab = "Values", horizontal = TRUE)
+boxplot(Salary_data$hours.per.week, main = "hours", xlab = "Columns", ylab = "Values", horizontal = TRUE)
+boxplot(Salary_data$education.num, main = "education.num", xlab = "Columns", ylab = "Values", horizontal = TRUE)
+
+
+```
+
+# Plot Booking status to other categorial features
+```{r}
+ for (col in names(rm_continuous_value)) {
+    plot_data <- Salary_data %>%
+    ggplot(aes(x = factor(.data[[col]]), fill = salary)) +
+    geom_bar(position = position_dodge()) +
+    geom_text(aes(label = ..count..), stat = "count") +
+    labs(x = col)  
+    grid.arrange(plot_data)
+}
+
+```
+
+# heatmap continous feature
+```{r}
+corrplot.mixed(cor(subset(continous_value, select = -salary)), tl.col="black", tl.pos = "lt", tl.cex = 0.7,cl.cex = .7, number.cex=.7)
+#corrplot(cor(subset(continous_value, select = -salary)),  method = "number",col = colorRampPalette(c("white", "blue"))(100))
+#corrplot(cor(subset(continous_value, select = -salary)))
+```
+
+# Plot 2 predictors with booking status overlay
+```{r}
+ggplot(Salary_data, aes(age)) + 
+  geom_histogram(aes(fill = salary), position = position_dodge(), color = "black")
+
+ggplot(data=Salary_data, aes(age)) +
+  geom_bar(aes(fill=salary), position = "fill")+ coord_flip()
+
+ggplot(Salary_data, aes(hours.per.week)) + 
+  geom_histogram(aes(fill = salary), position = position_dodge(), color = "black")
+
+ggplot(data=Salary_data, aes(hours.per.week)) +
+  geom_bar(aes(fill=salary), position = "fill")+ coord_flip()
+```
+# Split train to test
+```{r}
+set.seed(24)
+original <- nrow(Salary_data)
+train_ind <- runif(original) < 0.80
+train_data <- Salary_data[train_ind,]
+test_data <- Salary_data[!train_ind,]
+train_data$salary <- as.factor(train_data$salary)
+test_data$salary <- as.factor(test_data$salary)
+
+```
+
+# Classifier
+```{r}
+#native_country_levels <- levels(train_data$native.country)
+native_country_levels <- levels(test_data$native.country)
+ 
+#train_data$native.country <- factor(train_data$native.country, levels = native_country_levels)
+test_data$native.country <- factor(test_data$native.country, levels = native_country_levels)
+ 
+
+train_data$agemm <- (train_data$age - min(train_data$age))/  (max(train_data$age)- min(train_data$age))
+test_data$agemm <- (test_data$age - min(test_data$age))/  (max(test_data$age)- min(test_data$age))
+
+test_data$native.country <- as.factor(test_data$native.country)
+train_data$native.country <- as.factor(train_data$native.country)
+
+cart <- rpart(formula = salary ~.,  data = train_data, method= "class")
+#               agemm + education, data = train_data, method= "class")
+pred_CART <-  predict(object = cart, newdata = test_data[-15], type = "class")
+cm_CART <- confusionMatrix(pred_CART, test_data$salary)
+
+
+C5 <-  C5.0(salary ~ agemm + education, 
+            data = train_data)
+pred_C5 <-  predict(object = C5, newdata = test_data, type = "class")
+cm_c5 <- confusionMatrix(pred_C5, test_data$salary)
+
+
+nb <- naiveBayes(formula = salary ~ agemm
+                 + education, data = train_data)
+pred_nb <- predict(object = nb, newdata = test_data)
+cm_nb <- confusionMatrix(pred_nb, test_data$salary)
+
+
+logreg <- glm(formula = salary ~ agemm + education, 
+              data=train_data, family=binomial) 
+#summary(logreg)
+pred_logreg <-  predict(object=logreg, newdata = test_data)
+pred_logreg_bin <- ifelse(pred_logreg >= 0.5, 1, 0)
+#cm_logreg <- confusionMatrix(pred_logreg_bin, test_data$booking_status)
+
+t_pred_logreg <- table(test_data$salary, pred_logreg_bin)
+colnames(t_pred_logreg) <- c("Predicted: 0", "Predicted: 1")
+row.names(t_pred_logreg) <- c("Actual:  0", "Actual:  1")
+addmargins(A=t_pred_logreg, FUN = list(Total = sum), quiet = TRUE)
+
+
+```
